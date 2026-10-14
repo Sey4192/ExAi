@@ -1,0 +1,15 @@
+backend/venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+backend/results/*.joblib
+backend/results/*.csv
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/android/
+mobile/ios/
+*.apk
+*.aab
+*.keystore
+*.jks
