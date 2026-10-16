@@ -1,9 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import * as storage from "../storage/storage";
 import { predictSession, simulateSession } from "../api/client";
-// In AppContext.js: import the reminder functions ...
 import { planEveningReminders, scheduleFollowUp } from "../notifications/notifications";
-const quietly = (fn) => fn().catch(() => {}); // reminders must never break the app 
+
+const quietly = (fn) => fn().catch(() => {}); // reminders must never break the app
+
 const AppContext = createContext(null);
  
 export function AppProvider({ children }) {
@@ -12,18 +13,21 @@ export function AppProvider({ children }) {
   useEffect(() => {
     storage.loadHistory().then(setHistory);
   }, []);
- 
+   
   const addResult = useCallback((result, source) => {
     const entry = { id: String(Date.now()), timestamp: Date.now(), source, result };
     setHistory((prev) => {
       const next = [entry, ...prev];
-      // ... and inside addResult, after building `next`:
-quietly(() => planEveningReminders(next));
       storage.saveHistory(next);
+      quietly(() => planEveningReminders(next));
       return next;
     });
+    if (result.risk_label === "high_risk") quietly(() => scheduleFollowUp());
     return entry;
   }, []);
+
+    
+
  
   const deleteEntry = useCallback((id) => {
     setHistory((prev) => {
@@ -69,7 +73,3 @@ export function useRunCheck(navigation) {
  
   return { run, loading, error };
 }
-
- 
-
-if (result.risk_label === "high_risk") quietly(() => scheduleFollowUp());

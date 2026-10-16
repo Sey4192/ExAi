@@ -4,6 +4,7 @@ import { Button, Card, Text } from "react-native-paper";
 import * as Notifications from "expo-notifications";
 import { useApp, useRunCheck } from "../context/AppContext";
 import { enableReminders, planEveningReminders, sendTestNotification } from "../notifications/notifications";
+import { registerBackgroundTask } from "../notifications/backgroundTask";
 
 export default function HomeScreen({ navigation }) {
   const { history } = useApp();
@@ -21,6 +22,7 @@ export default function HomeScreen({ navigation }) {
     const granted = await enableReminders(); // shows Android's permission prompt
     if (granted) {
       await planEveningReminders(history);
+      await registerBackgroundTask().catch(() => {}); // not available everywhere; reminders still work
       await sendTestNotification();
       setAskReminders(false);
     }
