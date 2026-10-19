@@ -1,136 +1,150 @@
-import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
-import { Platform, View, useWindowDimensions } from "react-native";
-import {
-  NavigationContainer,
-  createNavigationContainerRef,
-} from "@react-navigation/native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, Platform, StyleSheet, View, useWindowDimensions } from "react-native";
+import { PaperProvider, Text } from "react-native-paper";
+import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { MD3LightTheme, PaperProvider } from "react-native-paper";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import * as Notifications from "expo-notifications";
-import { AppProvider } from "./src/context/AppContext";
-import HomeScreen from "./src/screens/HomeScreen";
+import { StatusBar } from "expo-status-bar";
+import { LinearGradient } from "expo-linear-gradient";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  useFonts,
+  PlusJakartaSans_400Regular,
+  PlusJakartaSans_500Medium,
+  PlusJakartaSans_600SemiBold,
+  PlusJakartaSans_700Bold,
+  PlusJakartaSans_800ExtraBold,
+} from "@expo-google-fonts/plus-jakarta-sans";
+
+import { paperTheme, navTheme, colors, gradients, type } from "./src/theme/theme";
+import { AppProvider, useApp } from "./src/context/AppContext";
+import DashboardScreen from "./src/screens/DashboardScreen";
 import CheckScreen from "./src/screens/CheckScreen";
 import HistoryScreen from "./src/screens/HistoryScreen";
+import InsightsScreen from "./src/screens/InsightsScreen";
 import AlertScreen from "./src/screens/AlertScreen";
-import LowRiskResultScreen from "./src/screens/LowRiskResultScreen";
 import ExplanationScreen from "./src/screens/ExplanationScreen";
+import LowRiskResultScreen from "./src/screens/LowRiskResultScreen";
 import BreakScreen from "./src/screens/BreakScreen";
+import SettingsScreen from "./src/screens/SettingsScreen";
+import OnboardingScreen from "./src/screens/OnboardingScreen";
+import TabBar from "./src/components/TabBar";
+import { WEB_FRAME_WIDTH, isFramed } from "./src/utils/layout";
+import * as Notifications from "expo-notifications";
 // Side effect: defines the background task before the app renders.
 import "./src/notifications/backgroundTask";
 
 const Stack = createNativeStackNavigator();
-const Tab = createBottomTabNavigator();
 const navigationRef = createNavigationContainerRef();
+const Tab = createBottomTabNavigator();
 
 function MainTabs() {
   return (
-    <Tab.Navigator>
-      <Tab.Screen
-        name="Home"
-        component={HomeScreen}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons
-              name="home-outline"
-              color={color}
-              size={size}
-            />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Check"
-        component={CheckScreen}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons name="radar" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="History"
-        component={HistoryScreen}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons name="history" color={color} size={size} />
-          ),
-        }}
-      />
+    <Tab.Navigator tabBar={(props) => <TabBar {...props} />} screenOptions={{ headerShown: false }}>
+      <Tab.Screen name="Home" component={DashboardScreen} />
+      <Tab.Screen name="Check" component={CheckScreen} />
+      <Tab.Screen name="History" component={HistoryScreen} />
+      <Tab.Screen name="Insights" component={InsightsScreen} />
     </Tab.Navigator>
   );
 }
 
-// Opens the right tab when a notification is tapped, including when the tap launched the app.
+function Splash({ fontsReady }) {
+  return (
+    <LinearGradient colors={gradients.primary} style={styles.splash}>
+      <MaterialCommunityIcons name="leaf" size={48} color="#fff" />
+      <Text style={[styles.splashText, !fontsReady && { fontFamily: undefined, fontWeight: "800" }]}>Tymeout</Text>
+      <ActivityIndicator color="#fff" style={{ marginTop: 24 }} />
+    </LinearGradient>
+  );
+}
+
 function NotificationRouter({ navReady }) {
   const response = Notifications.useLastNotificationResponse();
+
   useEffect(() => {
-    const screen = response?.notification.request.content.data?.screen;
-    if (navReady && screen) navigationRef.navigate("Main", { screen });
+    if (!navReady || !response || !navigationRef.isReady()) return;
+    if (response.actionIdentifier === "im-okay") return;
+    const screen = response.notification.request.content.data?.screen;
+    if (screen === "Break") navigationRef.navigate("Break");
+    else if (screen === "Check" || screen === "Home") navigationRef.navigate("Main", { screen });
   }, [response, navReady]);
+
   return null;
 }
-// On wide browser windows, keep a phone-sized column in the middle.
+
+function Root({ fontsReady }) {
+  const { ready, onboarded } = useApp();
+  const [navReady, setNavReady] = useState(false);
+  if (!ready || !fontsReady) return <Splash fontsReady={fontsReady} />;
+
+  return (
+    <NavigationContainer theme={navTheme} ref={navigationRef} onReady={() => setNavReady(true)}>
+      {Platform.OS !== "web" && onboarded ? <NotificationRouter navReady={navReady} /> : null}
+      <Stack.Navigator screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
+        {!onboarded ? (
+          <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+        ) : (
+          <>
+            <Stack.Screen name="Main" component={MainTabs} />
+            <Stack.Screen name="Alert" component={AlertScreen} options={{ animation: "fade_from_bottom" }} />
+            <Stack.Screen name="LowRiskResult" component={LowRiskResultScreen} options={{ animation: "fade_from_bottom" }} />
+            <Stack.Screen name="Explanation" component={ExplanationScreen} />
+            <Stack.Screen name="Break" component={BreakScreen} options={{ animation: "fade", gestureEnabled: false }} />
+            <Stack.Screen name="Settings" component={SettingsScreen} />
+          </>
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+
+// On wide browser windows the app keeps a phone-sized column.
 function WebFrame({ children }) {
   const { width } = useWindowDimensions();
-  if (Platform.OS !== "web" || width <= 480) return children;
+  if (!isFramed(width)) return children;
   return (
-    <View style={{ flex: 1, alignItems: "center", backgroundColor: "#DCE6EC" }}>
-      <View style={{ flex: 1, width: 440, overflow: "hidden" }}>
-        {children}
-      </View>
+    <View style={styles.webBackdrop}>
+      <View style={styles.webFrame}>{children}</View>
     </View>
   );
 }
 
 export default function App() {
-  const [navReady, setNavReady] = useState(false);
+  const [fontsLoaded, fontError] = useFonts({
+    PlusJakartaSans_400Regular,
+    PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
+    PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold,
+  });
 
   return (
     <SafeAreaProvider>
-      <PaperProvider theme={MD3LightTheme}>
+      <PaperProvider theme={paperTheme}>
         <AppProvider>
+          <StatusBar style="light" />
           <WebFrame>
-            <NavigationContainer
-              ref={navigationRef}
-              onReady={() => setNavReady(true)}
-            >
-              {Platform.OS !== "web" && (
-                <NotificationRouter navReady={navReady} />
-              )}
-              <Stack.Navigator>
-                <Stack.Screen
-                  name="Main"
-                  component={MainTabs}
-                  options={{ headerShown: false }}
-                />
-                <Stack.Screen
-                  name="Alert"
-                  component={AlertScreen}
-                  options={{ title: "A gentle nudge" }}
-                />
-                <Stack.Screen
-                  name="LowRiskResult"
-                  component={LowRiskResultScreen}
-                  options={{ title: "Checked in" }}
-                />
-                <Stack.Screen
-                  name="Explanation"
-                  component={ExplanationScreen}
-                  options={{ title: "Why you're seeing this" }}
-                />
-                <Stack.Screen
-                  name="Break"
-                  component={BreakScreen}
-                  options={{ title: "A minute for you" }}
-                />
-              </Stack.Navigator>
-            </NavigationContainer>
+            <View style={styles.root}>
+              <Root fontsReady={fontsLoaded || !!fontError} />
+            </View>
           </WebFrame>
         </AppProvider>
       </PaperProvider>
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.background },
+  webBackdrop: { flex: 1, alignItems: "center", backgroundColor: "#DCE6EC" },
+  webFrame: {
+    flex: 1,
+    width: WEB_FRAME_WIDTH,
+    overflow: "hidden",
+    boxShadow: "0 0 40px rgba(30, 60, 80, 0.18)",
+  },
+  splash: { flex: 1, alignItems: "center", justifyContent: "center" },
+  splashText: { ...type.h1, color: "#fff", letterSpacing: 4, marginTop: 8 },
+});

@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "Tymeout Practice",
-    "slug": "tymeout-practice",
-    "version": "1.0.0",
+    "name": "Tymeout",
+    "slug": "tymeout",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "android": {
-      "package": "com.sey4192.tymeoutpractice",
-      "versionCode": 1,
+      "package": "com.sey4192.tymeout",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#3E6B89",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -16,11 +16,35 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       }
     },
-    "web": { "favicon": "./assets/favicon.png" },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
     "plugins": [
       "expo-background-task",
-      ["expo-notifications", { "icon": "./assets/notification-icon.png", "color": "#3E6B89" }],
-      ["expo-splash-screen", { "image": "./assets/splash-icon.png", "imageWidth": 200, "backgroundColor": "#3E6B89" }]
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#3E6B89"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "backgroundColor": "#3E6B89"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ]
   }
 }

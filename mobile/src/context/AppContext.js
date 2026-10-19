@@ -1,75 +1,204 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import * as storage from "../storage/storage";
-import { predictSession, simulateSession } from "../api/client";
-import { planEveningReminders, scheduleFollowUp } from "../notifications/notifications";
-
-const quietly = (fn) => fn().catch(() => {}); // reminders must never break the app
-
+import { setBaseUrl, simulateSession, predictSession, CONNECTION_HELP } from "../api/client";
+import * as haptics from "../utils/haptics";
+import * as notifications from "../notifications/notifications";
+import { registerBackgroundTask } from "../notifications/backgroundTask";
+ 
 const AppContext = createContext(null);
  
+// Notification calls are best-effort and must never break the app.
+const quietly = (fn) => fn().catch(() => {});
+ 
 export function AppProvider({ children }) {
+  const [ready, setReady] = useState(false);
   const [history, setHistory] = useState([]);
+  const [onboarded, setOnboardedState] = useState(false);
+  const [serverUrl, setServerUrlState] = useState(null);
+  const [profile, setProfile] = useState({});
+  const [reminders, setReminders] = useState(storage.DEFAULT_REMINDERS);
+  const [notificationsAllowed, setNotificationsAllowed] = useState(false);
  
   useEffect(() => {
-    storage.loadHistory().then(setHistory);
-  }, []);
-   
-  const addResult = useCallback((result, source) => {
-    const entry = { id: String(Date.now()), timestamp: Date.now(), source, result };
-    setHistory((prev) => {
-      const next = [entry, ...prev];
-      storage.saveHistory(next);
-      quietly(() => planEveningReminders(next));
-      return next;
-    });
-    if (result.risk_label === "high_risk") quietly(() => scheduleFollowUp());
-    return entry;
-  }, []);
-
-    
-
+    (async () => {
+      const [h, o, url, p, r] = await Promise.all([
+        storage.loadHistory(),
+        storage.hasOnboarded(),
+        storage.loadServerUrl(),
+        storage.loadProfile(),
+        storage.loadReminders(),
+      ]);
+      setHistory(h);
+      setOnboardedState(o);
+      setServerUrlState(url);
+      setBaseUrl(url);
+      setProfile(p);
+      setReminders(r);
+      setReady(true);
  
-  const deleteEntry = useCallback((id) => {
-    setHistory((prev) => {
-      const next = prev.filter((h) => h.id !== id);
-      storage.saveHistory(next);
-      return next;
-    });
+      await quietly(async () => {
+        await notifications.configureNotifications();
+        const { granted } = await notifications.getPermission();
+        setNotificationsAllowed(granted);
+        if (granted) {
+          await notifications.planReminders(r, h);
+          await notifications.setCompanion(r.companion);
+          await registerBackgroundTask();
+        }
+      });
+    })();
   }, []);
+ 
+  const addResult = useCallback(
+    (result, source) => {
+      const entry = { id: `${Date.now()}`, timestamp: Date.now(), source, result };
+      setHistory((prev) => {
+        const next = [entry, ...prev];
+        storage.saveHistory(next);
+        quietly(() => notifications.planReminders(reminders, next));
+        return next;
+      });
+      if (result.risk_label === "high_risk") quietly(() => notifications.scheduleFollowUp(reminders));
+      return entry;
+    },
+    [reminders]
+  );
  
   const clearHistory = useCallback(async () => {
     await storage.clearHistory();
     setHistory([]);
+    quietly(() => notifications.planReminders(reminders, []));
+  }, [reminders]);
+ 
+  const deleteEntry = useCallback(
+    (id) => {
+      setHistory((prev) => {
+        const next = prev.filter((h) => h.id !== id);
+        storage.saveHistory(next);
+        quietly(() => notifications.planReminders(reminders, next));
+        return next;
+      });
+    },
+    [reminders]
+  );
+ 
+  const completeOnboarding = useCallback(async () => {
+    await storage.setOnboarded();
+    setOnboardedState(true);
   }, []);
  
-  return (
-    <AppContext.Provider value={{ history, addResult, deleteEntry, clearHistory }}>
-      {children}
-    </AppContext.Provider>
+  const updateServerUrl = useCallback(async (url) => {
+    const clean = url ? url.trim().replace(/\/+$/, "") : null;
+    await storage.saveServerUrl(clean);
+    setServerUrlState(clean);
+    setBaseUrl(clean);
+  }, []);
+ 
+  const updateProfile = useCallback(async (changes) => {
+    setProfile((prev) => {
+      const next = { ...prev, ...changes };
+      storage.saveProfile(next);
+      return next;
+    });
+  }, []);
+ 
+  const enableNotifications = useCallback(async () => {
+    let granted = false;
+    await quietly(async () => {
+      granted = await notifications.requestPermission();
+      setNotificationsAllowed(granted);
+      if (granted) {
+        await notifications.planReminders(reminders, history);
+        await notifications.setCompanion(reminders.companion);
+        await registerBackgroundTask();
+      }
+    });
+    return granted;
+  }, [reminders, history]);
+ 
+  const updateReminders = useCallback(
+    async (changes) => {
+      const next = { ...reminders, ...changes };
+      setReminders(next);
+      await storage.saveReminders(next);
+      await quietly(async () => {
+        await notifications.planReminders(next, history);
+        if ("companion" in changes) await notifications.setCompanion(next.companion);
+      });
+    },
+    [reminders, history]
   );
+ 
+  const value = useMemo(
+    () => ({
+      ready,
+      history,
+      onboarded,
+      serverUrl,
+      profile,
+      reminders,
+      notificationsAllowed,
+      addResult,
+      clearHistory,
+      deleteEntry,
+      completeOnboarding,
+      updateServerUrl,
+      updateProfile,
+      enableNotifications,
+      updateReminders,
+    }),
+    [
+      ready,
+      history,
+      onboarded,
+      serverUrl,
+      profile,
+      reminders,
+      notificationsAllowed,
+      addResult,
+      clearHistory,
+      deleteEntry,
+      completeOnboarding,
+      updateServerUrl,
+      updateProfile,
+      enableNotifications,
+      updateReminders,
+    ]
+  );
+ 
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
  
-export const useApp = () => useContext(AppContext);
+export function useApp() {
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error("useApp must be used inside AppProvider");
+  return ctx;
+}
  
-// Runs one check, saves it, and opens the matching result screen.
 export function useRunCheck(navigation) {
   const { addResult } = useApp();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
  
-  const run = async (features) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = features ? await predictSession(features) : await simulateSession();
-      const entry = addResult(result, features ? "manual" : "simulated");
-      navigation.navigate(result.risk_label === "high_risk" ? "Alert" : "LowRiskResult", { entry });
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const run = useCallback(
+    async (features) => {
+      haptics.press();
+      setLoading(true);
+      setError(null);
+      try {
+        const result = features ? await predictSession(features) : await simulateSession();
+        const entry = addResult(result, features ? "manual" : "simulated");
+        if (result.risk_label === "high_risk") haptics.nudge();
+        else haptics.success();
+        navigation.navigate(result.risk_label === "high_risk" ? "Alert" : "LowRiskResult", { entry });
+      } catch (e) {
+        setError(e.message && !/Network request failed|fetch/i.test(e.message) ? e.message : CONNECTION_HELP);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [addResult, navigation]
+  );
  
-  return { run, loading, error };
+  return { run, loading, error, clearError: () => setError(null) };
 }

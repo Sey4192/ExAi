@@ -1,83 +1,189 @@
-import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import * as Notifications from "expo-notifications";
+import { colors } from "../theme/theme";
  
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-  }),
-});
+const CHANNEL_CHECKINS = "checkins";
+const CHANNEL_COMPANION = "companion";
+const CATEGORY_CHECKIN = "checkin";
+const COMPANION_ID = "exai-companion"; // pre-rename ID, so an existing pinned notification can still be removed
+const DAYS_AHEAD = 3;
  
-export async function enableReminders() {
-  const { granted } = await Notifications.requestPermissionsAsync();
-  if (!granted) return false;
+export const REMINDER_SLOTS = {
+  morning: {
+    hour: 9,
+    minute: 0,
+    label: "Morning intention",
+    detail: "9:00 AM · set the tone for the day",
+    messages: [
+      { title: "Good morning", body: "What's one thing you'd rather do with your time today than scroll?" },
+      { title: "Morning check", body: "Before the feeds pull you in: how do you want today to feel?" },
+      { title: "A fresh start", body: "Want to decide now how much phone time today deserves?" },
+    ],
+  },
+  evening: {
+    hour: 20,
+    minute: 0,
+    label: "Evening check-in",
+    detail: "8:00 PM · skipped if you've already checked in",
+    messages: [
+      { title: "How was today?", body: "Got a minute? Let's look at how your day on your phone went." },
+      { title: "Evening check-in", body: "How are you feeling after today? A quick check can help you wind down." },
+      { title: "Hey, just checking in", body: "Long day? See how your scrolling's been, no judgement." },
+    ],
+  },
+  lateNight: {
+    hour: 23,
+    minute: 0,
+    label: "Late-night wind-down",
+    detail: "11:00 PM · a nudge towards rest",
+    messages: [
+      { title: "It's getting late", body: "Your sleep will thank you. Ready to put the phone down for tonight?" },
+      { title: "Still up?", body: "Late-night scrolling tends to run long. Want to call it a night?" },
+      { title: "Time to rest", body: "Whatever's on there will still be there tomorrow. Sleep well." },
+    ],
+  },
+};
+ 
+const FOLLOW_UPS = [
+  { title: "How are you doing?", body: "That last session was a heavy one. How are you feeling now?" },
+  { title: "Thinking of you", body: "Did you manage to take a break earlier? Tap to check in." },
+];
+ 
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+ 
+export async function configureNotifications() {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    }),
+  });
+ 
   if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("checkins", {
+    await Notifications.setNotificationChannelAsync(CHANNEL_CHECKINS, {
       name: "Check-ins",
+      description: "Gentle reminders to check in with yourself",
       importance: Notifications.AndroidImportance.DEFAULT,
+      lightColor: colors.primary,
+    });
+    await Notifications.setNotificationChannelAsync(CHANNEL_COMPANION, {
+      name: "Quick check-in shortcut",
+      description: "Keeps Tymeout one tap away in your notifications",
+      importance: Notifications.AndroidImportance.LOW,
+      sound: null,
+      vibrationPattern: null,
+      enableVibrate: false,
     });
   }
-  return true;
+ 
+  await Notifications.setNotificationCategoryAsync(CATEGORY_CHECKIN, [
+    { identifier: "check-in", buttonTitle: "Check in", options: { opensAppToForeground: true } },
+    { identifier: "im-okay", buttonTitle: "I'm okay", options: { opensAppToForeground: false } },
+  ]);
+}
+ 
+export async function getPermission() {
+  const { granted, canAskAgain } = await Notifications.getPermissionsAsync();
+  return { granted, canAskAgain };
+}
+ 
+export async function requestPermission() {
+  const { granted } = await Notifications.requestPermissionsAsync();
+  return granted;
+}
+ 
+function content({ title, body }, screen, extra = {}) {
+  return {
+    title,
+    body,
+    data: { screen, ...extra },
+    categoryIdentifier: CATEGORY_CHECKIN,
+    color: colors.primary,
+  };
 }
  
 async function cancelKind(kind) {
-  const pending = await Notifications.getAllScheduledNotificationsAsync();
-  const mine = pending.filter((n) => n.content.data?.kind === kind);
-  await Promise.all(mine.map((n) => Notifications.cancelScheduledNotificationAsync(n.identifier)));
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(
+    scheduled
+      .filter((n) => n.content.data?.kind === kind)
+      .map((n) => Notifications.cancelScheduledNotificationAsync(n.identifier))
+  );
 }
  
-// One-off 8 PM reminders for the next three days; skip today after a check-in.
-export async function planEveningReminders(history) {
-  await cancelKind("evening");
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const checkedInToday = history.some((h) => h.timestamp >= today.getTime());
+function checkedInToday(history) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  return history.some((h) => h.timestamp >= start.getTime());
+}
  
-  for (let day = 0; day < 3; day++) {
-    const when = new Date();
-    when.setDate(when.getDate() + day);
-    when.setHours(20, 0, 0, 0);
-    if (when <= new Date() || (day === 0 && checkedInToday)) continue;
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "How was today?",
-        body: "Got a minute? Let's look at how your day on your phone went.",
-        data: { kind: "evening", screen: "Check" },
-      },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when, channelId: "checkins" },
-    });
+// One-off reminders for the next few days, so tonight's can be skipped after a check-in.
+export async function planReminders(prefs, history = []) {
+  if (!(await getPermission()).granted) return;
+  await cancelKind("reminder");
+ 
+  const now = Date.now();
+  const doneToday = checkedInToday(history);
+ 
+  for (let day = 0; day < DAYS_AHEAD; day++) {
+    for (const [key, slot] of Object.entries(REMINDER_SLOTS)) {
+      if (!prefs[key]) continue;
+      const when = new Date();
+      when.setDate(when.getDate() + day);
+      when.setHours(slot.hour, slot.minute, 0, 0);
+      if (when.getTime() <= now + 60 * 1000) continue;
+      if (day === 0 && key === "evening" && doneToday) continue;
+ 
+      await Notifications.scheduleNotificationAsync({
+        content: content(pick(slot.messages), key === "lateNight" ? "Break" : "Check", { kind: "reminder", slot: key }),
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when, channelId: CHANNEL_CHECKINS },
+      });
+    }
   }
 }
  
-export async function scheduleFollowUp() {
+export async function scheduleFollowUp(prefs, delayMinutes = 120) {
+  if (!prefs.followUps || !(await getPermission()).granted) return;
   await cancelKind("follow-up");
   await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "How are you doing?",
-      body: "That last session was a heavy one. How are you feeling now?",
-      data: { kind: "follow-up", screen: "Home" },
-    },
+    content: content(pick(FOLLOW_UPS), "Home", { kind: "follow-up" }),
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: 2 * 60 * 60,
-      channelId: "checkins",
+      seconds: delayMinutes * 60,
+      channelId: CHANNEL_CHECKINS,
     },
   });
 }
-// Sends one notification a few seconds from now, to check reminders work.
+ 
+export async function setCompanion(enabled) {
+  await Notifications.dismissNotificationAsync(COMPANION_ID).catch(() => {});
+  if (!enabled || !(await getPermission()).granted) return;
+  await Notifications.scheduleNotificationAsync({
+    identifier: COMPANION_ID,
+    content: {
+      title: "Tymeout is here when you need it",
+      body: "Tap to check in on how your scrolling's going.",
+      data: { screen: "Check", kind: "companion" },
+      sticky: true,
+      autoDismiss: false,
+      priority: Notifications.AndroidNotificationPriority.LOW,
+      color: colors.primary,
+    },
+    trigger: Platform.OS === "android" ? { channelId: CHANNEL_COMPANION } : null,
+  });
+}
+ 
 export async function sendTestNotification() {
   await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "This is how I'll check in",
-      body: "Gentle, quiet, and only as often as you choose.",
-      data: { screen: "Home" },
-    },
+    content: content({ title: "This is how I'll check in", body: "Gentle, quiet, and only as often as you choose." }, "Home", {
+      kind: "test",
+    }),
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-      seconds: 5,
-      channelId: "checkins",
+      seconds: 3,
+      channelId: CHANNEL_CHECKINS,
     },
   });
 }

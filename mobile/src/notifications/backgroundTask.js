@@ -1,14 +1,16 @@
 import * as BackgroundTask from "expo-background-task";
 import * as TaskManager from "expo-task-manager";
-import { loadHistory } from "../storage/storage";
-import { planEveningReminders } from "./notifications";
+import { loadHistory, loadReminders } from "../storage/storage";
+import { planReminders } from "./notifications";
  
-const TASK = "replan-reminders";
+// Pre-rename ID, kept so an already-registered task still matches.
+export const BACKGROUND_TASK = "exai-background-refresh";
  
 // Must be defined at module scope, before the app renders.
-TaskManager.defineTask(TASK, async () => {
+TaskManager.defineTask(BACKGROUND_TASK, async () => {
   try {
-    await planEveningReminders(await loadHistory());
+    const [prefs, history] = await Promise.all([loadReminders(), loadHistory()]);
+    await planReminders(prefs, history);
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
     return BackgroundTask.BackgroundTaskResult.Failed;
@@ -16,7 +18,14 @@ TaskManager.defineTask(TASK, async () => {
 });
  
 export async function registerBackgroundTask() {
-  if (!(await TaskManager.isTaskRegisteredAsync(TASK))) {
-    await BackgroundTask.registerTaskAsync(TASK, { minimumInterval: 60 });
+  try {
+    const status = await BackgroundTask.getStatusAsync();
+    if (status !== BackgroundTask.BackgroundTaskStatus.Available) return false;
+    if (!(await TaskManager.isTaskRegisteredAsync(BACKGROUND_TASK))) {
+      await BackgroundTask.registerTaskAsync(BACKGROUND_TASK, { minimumInterval: 60 });
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
